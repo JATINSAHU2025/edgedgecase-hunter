@@ -1,50 +1,59 @@
-# EdgeCase Hunter AI
+# EdgeCase Hunter AI — MobileCLIP2-S2 backend
 
-Android visual-identification app (source version 1.0.1) with:
-- On-device EfficientNet-Lite0 INT8 / ImageNet-1K classification.
-- On-device text recognition and barcode/QR scanning.
-- Five-section Compose UI, in-app CameraX capture, and local scan library.
-- Raised central camera action placed outside the navigation Surface to prevent top-edge clipping, with Android navigation-bar insets respected.
-- Optional HTTPS online visual identification through the included FastAPI backend.
+This backend preserves the Android app's `/classify` JSON contract and defaults to Apple's MobileCLIP2-S2 image-text model. The Dockerfile downloads the official checkpoint from Hugging Face during image creation and stores it at `/opt/model/mobileclip2_s2.pt`. When running outside Docker, the provider can download it on first use and cache it under `HF_HOME`.
 
-## Build the Android app
+## What it does
 
-Requirements: JDK 17+ and Android SDK platform 35. From Windows PowerShell, in this project folder:
+- Receives the photo captured by the existing Android camera flow.
+- Compares the photo against a curated hardware-category vocabulary using MobileCLIP2-S2.
+- Returns the best category plus four alternatives and a qualitative uncertainty estimate.
+- Optionally ranks your own product reference images and returns SKU/brand/size/price metadata from a precomputed catalog index.
+- Does not save uploaded photos.
 
-```powershell
-.\gradlew.bat testDebugUnitTest assembleDebug
+**Important limitation:** this is zero-shot category matching, not exact SKU identification. Exact brand, dimensions, and product price require your own catalog images and metadata. The app's existing EfficientNet-Lite0 remains the offline fallback; this backend adds MobileCLIP2 to the online path. MobileCLIP2 is not embedded into the APK by this change.
+
+## Add your own hardware catalog (recommended for accuracy)
+
+Put reference images under `catalog/images/` and fill `catalog/products.csv` with columns `product_id,sku,name,category,brand,dimensions,price,image_path`. The `image_path` is relative to the catalog folder, e.g. `images/basin_001.jpg`. Use real product photos and include multiple views where available.
+
+After installing the backend dependencies and making the model checkpoint available, build the image index from the backend directory:
+
+```bash
+python index_catalog.py --csv catalog/products.csv --root catalog --output catalog/catalog_embeddings.pt
 ```
 
-If the build succeeds, the debug APK is `app\build\outputs\apk\debug\app-debug.apk`. On Windows, you can also double-click `BUILD_AND_TEST_WINDOWS.bat` to run unit tests and build the APK.
+Set `CATALOG_EMBEDDINGS_PATH=catalog/catalog_embeddings.pt` and redeploy/mount the catalog index with the backend. The API returns up to five `matches` with product metadata. A similarity score is a ranking score, not a probability; calibrate `CATALOG_MIN_SIMILARITY` using a held-out set of real camera photos before relying on matches. If no catalog index is present, the backend continues with general hardware-category matching.
 
-`local.properties` is machine-specific and intentionally excluded. Open the project in Android Studio to create it, or configure `ANDROID_HOME`. Do not pin `org.gradle.java.home` to another computer's JDK path.
+## Run / deploy
 
-## Online identification
+Use Docker; the image installs Apple's official `ml-mobileclip` implementation and the required OpenCLIP MobileCLIP2 patch. The Docker build downloads the official 398 MB `mobileclip2_s2.pt` checkpoint into the image, so the build needs outbound access to Hugging Face. The deployed image is correspondingly large; choose a host with enough disk and RAM.
 
-The previous source had the Android `INTERNET` permission explicitly removed and did not implement a real online provider. This repaired source restores network permission and implements an HTTPS client, connection diagnostics, compressed image upload, and a FastAPI backend.
+Required environment variables:
 
-**Online identification still requires deployment and configuration.** The included backend defaults to MobileCLIP2-S2. Build/deploy `backend/` over public HTTPS, configure `EDGECASE_ACCESS_TOKEN`, install this Android source, then open Settings and enter the backend base URL and matching demo access token. The app appends `/classify`; the health check uses `/health`. Test the connection before enabling online identification. Online is opt-in and uploads the selected photo only when the user enables that mode and starts identification.
+```env
+VISION_PROVIDER=mobileclip2
+EDGECASE_ACCESS_TOKEN=use-a-long-random-token
+RATE_LIMIT_REQUESTS_PER_MINUTE=12
+CATALOG_EMBEDDINGS_PATH=catalog/catalog_embeddings.pt
+CATALOG_MIN_SIMILARITY=0.20
+```
 
-For product-level matching, also add your own product reference images and metadata and build the catalog embedding index as described in [`backend/README.md`](backend/README.md). Without this catalog, MobileCLIP2 returns likely hardware categories rather than exact SKUs. See [`ONLINE_SETUP.md`](ONLINE_SETUP.md) for deployment details.
+Build and run:
 
-For a private demo, the app stores the backend URL and demo token in app-private preferences. This is not a production-grade authentication arrangement. A public app needs real user authentication, server-side quotas, rate limiting, abuse monitoring, and careful secret management.
+```bash
+docker build -t edgecase-mobileclip2 .
+docker run --rm -p 8080:8080 \
+  -e VISION_PROVIDER=mobileclip2 \
+  -e EDGECASE_ACCESS_TOKEN='your-long-random-token' \
+  -v edgecase-hf-cache:/opt/hf-cache edgecase-mobileclip2
+```
 
-## Accuracy limitations
+Check `GET /health` with `Authorization: Bearer <token>`. The app endpoint is `POST /classify` with `imageBase64` and `mimeType`, as before.
 
-EfficientNet-Lite0 is a fixed 1,000-class ImageNet classifier and remains the offline fallback. Online MobileCLIP2-S2 can compare photos with hardware-oriented text labels and, when you configure a catalog index, with your own product reference images. Adding image files to the app does not retrain EfficientNet. Similarity is a ranking score, not a calibrated probability; evaluate on held-out photos before using matches for billing.
+### Optional Gemini fallback
 
-## Important implementation notes
+Set `VISION_PROVIDER=gemini` and `GEMINI_API_KEY` to use the previous Gemini-based backend instead. Do not put provider keys in the Android app.
 
-- Camera and gallery images are resized before classification/upload to reduce peak memory use.
-- Camera capture closes the CameraX `ImageProxy` in a `finally` block and surfaces decode errors instead of silently failing.
-- The Android app build and device behavior must still be verified on a machine with Android SDK/build tools; this source handoff does not include a newly built APK.
-- Backend validation tests: `python -m unittest discover -s backend -p "test_*.py" -v`.
+## Resource note
 
-## Third-party licenses
-
-See `THIRD_PARTY_NOTICES.md`.
-
-
-## MobileCLIP2-S2 online recognition
-
-The online backend defaults to Apple's MobileCLIP2-S2, ranks a hardware-oriented vocabulary, and optionally searches precomputed embeddings for your catalog photos. The Android Similar tab can display catalog product metadata returned by the backend. The existing EfficientNet-Lite0 still powers the offline path; this ZIP does not yet convert MobileCLIP2 into an Android-native model.
+MobileCLIP2 uses PyTorch on CPU in this Docker setup. Model initialization and the first request take longer than later requests. Choose a backend host with enough RAM for PyTorch and the model; a very small free server may be unsuitable. No accuracy percentage is claimed for your hardware catalog until it is tested on real held-out photos.

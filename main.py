@@ -260,10 +260,9 @@ def classify(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
-            # Keep internal paths out of client responses but preserve diagnostics in server logs.
             logger.exception("MobileCLIP2 classification failed")
             raise HTTPException(status_code=503, detail=(
-                "MobileCLIP2 is not ready. Check backend logs, model download access, and available memory."
+                f"MobileCLIP2 inference error ({type(exc).__name__}): {exc}"
             )) from exc
     if VISION_PROVIDER == "gemini":
         return _ask_gemini(image_bytes, body.mimeType)

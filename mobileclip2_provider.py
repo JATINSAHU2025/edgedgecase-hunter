@@ -64,11 +64,21 @@ def _load_model() -> dict:
             import open_clip
             from huggingface_hub import hf_hub_download
             from PIL import Image
-            from mobileclip.modules.common.mobileone import reparameterize_model
         except Exception as exc:
             raise RuntimeError(
-                "MobileCLIP2 runtime is missing. Build the backend with its MobileCLIP2 Dockerfile dependencies."
+                f"MobileCLIP2 runtime dependencies missing: {exc}"
             ) from exc
+
+        try:
+            from open_clip.modules.common.mobileone import reparameterize_model
+        except ImportError:
+            try:
+                from mobileclip.modules.common.mobileone import reparameterize_model
+            except ImportError:
+                try:
+                    from timm.utils import reparameterize_model
+                except ImportError:
+                    reparameterize_model = lambda m: m
 
         checkpoint = os.getenv("MOBILECLIP2_CHECKPOINT", "").strip()
         if not checkpoint:
@@ -85,14 +95,21 @@ def _load_model() -> dict:
             image_std=(1.0, 1.0, 1.0),
         )
         model.eval()
-        model = reparameterize_model(model)
+        try:
+            model = reparameterize_model(model)
+        except Exception:
+            pass
         model.to("cpu")
         tokenizer = open_clip.get_tokenizer("MobileCLIP2-S2")
 
         prompt_texts = [template.format(label=label) for label in HARDWARE_LABELS for template in _PROMPT_TEMPLATES]
         tokens = tokenizer(prompt_texts)
         with torch.inference_mode():
-            text_features = model.encode_text(tokens)
+            all_text_features = []
+            for b_idx in range(0, tokens.shape[0], 32):
+                batch_tokens = tokens[b_idx:b_idx + 32]
+                all_text_features.append(model.encode_text(batch_tokens))
+            text_features = torch.cat(all_text_features, dim=0)
             text_features = text_features / text_features.norm(dim=-1, keepdim=True).clamp_min(1e-12)
             text_features = text_features.reshape(len(HARDWARE_LABELS), len(_PROMPT_TEMPLATES), -1).mean(dim=1)
             text_features = text_features / text_features.norm(dim=-1, keepdim=True).clamp_min(1e-12)

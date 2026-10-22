@@ -6,7 +6,8 @@ COPY requirements.txt .
 # Install CPU-only PyTorch to avoid pulling CUDA libraries into a small API container.
 RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch torchvision && \
     pip install --no-cache-dir -r requirements.txt
-# Apple's official implementation supplies the MobileCLIP model components.
+# Install Apple's MobileCLIP2 implementation with a compatible OpenCLIP version.
+
 RUN git clone --depth 1 https://github.com/apple-aiml-research/ml-mobileclip.git /opt/ml-mobileclip && \
     git clone --depth 1 https://github.com/mlfoundations/open_clip.git /opt/open_clip && \
     cd /opt/open_clip && \
@@ -15,6 +16,7 @@ RUN git clone --depth 1 https://github.com/apple-aiml-research/ml-mobileclip.git
     pip install --no-cache-dir -e /opt/open_clip && \
     pip install --no-cache-dir -e /opt/ml-mobileclip && \
     pip install --no-cache-dir git+https://github.com/huggingface/pytorch-image-models
+
 # Bake the 398 MB official checkpoint into the backend image so the first app request does not need to download it.
 RUN mkdir -p /opt/model && python -c "from huggingface_hub import hf_hub_download; import shutil; p=hf_hub_download(repo_id='apple/MobileCLIP2-S2', filename='mobileclip2_s2.pt'); shutil.copy2(p, '/opt/model/mobileclip2_s2.pt')"
 COPY main.py mobileclip2_provider.py index_catalog.py ./

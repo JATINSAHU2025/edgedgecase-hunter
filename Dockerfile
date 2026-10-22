@@ -8,14 +8,17 @@ RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu 
     pip install --no-cache-dir -r requirements.txt
 # Install Apple's MobileCLIP2 implementation with a compatible OpenCLIP version.
 
+
 RUN git clone --depth 1 https://github.com/apple-aiml-research/ml-mobileclip.git /opt/ml-mobileclip && \
-    git clone --depth 1 https://github.com/mlfoundations/open_clip.git /opt/open_clip && \
+    git clone https://github.com/mlfoundations/open_clip.git /opt/open_clip && \
     cd /opt/open_clip && \
+    git checkout 7260a46e7b4bcf518f5200fea06da5bc85aae025 && \
     git apply /opt/ml-mobileclip/mobileclip2/open_clip_inference_only.patch && \
     cp -r /opt/ml-mobileclip/mobileclip2/* /opt/open_clip/src/open_clip/ && \
     pip install --no-cache-dir -e /opt/open_clip && \
     pip install --no-cache-dir -e /opt/ml-mobileclip && \
     pip install --no-cache-dir git+https://github.com/huggingface/pytorch-image-models
+
 
 # Bake the 398 MB official checkpoint into the backend image so the first app request does not need to download it.
 RUN mkdir -p /opt/model && python -c "from huggingface_hub import hf_hub_download; import shutil; p=hf_hub_download(repo_id='apple/MobileCLIP2-S2', filename='mobileclip2_s2.pt'); shutil.copy2(p, '/opt/model/mobileclip2_s2.pt')"

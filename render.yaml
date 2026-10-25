@@ -1,0 +1,16 @@
+# Render Blueprint: deploys the EdgeCase Hunter backend from the repo's Dockerfile.
+services:
+  - type: web
+    name: edgecase-hunter-backend
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: starter        # MobileCLIP2-S2 needs more RAM than the free plan (512 MB)
+    healthCheckPath: /health
+    envVars:
+      - key: VISION_PROVIDER
+        value: mobileclip2
+      - key: EDGECASE_ACCESS_TOKEN
+        generateValue: true   # Render creates a long random token; copy it into the app Settings
+      - key: RATE_LIMIT_REQUESTS_PER_MINUTE
+        value: "12"
